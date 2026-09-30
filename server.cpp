@@ -30,49 +30,101 @@ const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_
 
 // ---- Custom data structures
 
-// Stack: back the live Call Stack during execution
 template <typename T>
-class Stack
-{
-    struct Node
-    {
+class Stack {
+    struct Node {
         T data;
         Node *next;
+
+        public:
+        Node () {
+            this->next = nullptr;
+        }
+
+        Node (T val) {
+            this->next = nullptr;
+            this->data = val;
+        } 
     };
+
     Node *top;
     int32_t count;
 
 public:
-    // Implement these functions:
-    Stack()
-    { // initialize the stack
+    Stack() {
+        this->top = nullptr;
+        this->count = 0;
     }
-    void push(const T &val)
-    {
 
-        // pushes the value on the stack if max limit is not reached yet.
+    ~Stack () {
+        for (int i = 0; i < this->count; i++) {
+            Node* temp = this->top;
+            this->top = this->top->next;
+            delete temp;
+        }
     }
-    T pop()
-    {
-        // pop the top value on the stack
+
+    void push(const T &val) {
+        Node* temp = new Node (val);
+        if (this->count == 0) {
+            this->top = temp;
+            this->count ++;
+            return;
+        }
+        temp->next = this->top;
+        this->top = temp;
+        this->count++;
     }
-    T &peek()
-    {
-        // returns the top value on the stack
+
+    T pop() {
+        if (this->count == 0) {
+            throw "Stack is empty.\n";
+        } else if (this->count == 1) {
+            T val = this->top->data;
+            delete top;
+            this->top = nullptr;
+            this->count --;
+            return val;
+        }
+
+        Node* temp = this->top;
+        T val = this->top->data;
+        this->top = this->top->next;
+        this->count --;
+        delete temp;
+        return val;
     }
-    bool isEmpty()
-    {
+    
+    T &peek() {
+        if (this->isEmpty()) {
+            throw "Stack is Empty.\n";
+        }
+        return this->top->data;
     }
-    int32_t depth()
-    {
+
+    bool isEmpty() {
+        return (this->count == 0);
     }
-    int32_t snapshot_into(T out[], int32_t maxLen)
-    {
-        // copies every frame, top to bottom in the array given as a parameter
-        // this is what buildSnapshot() call, returns count written
+
+    int32_t depth() {
+        return this->count;
+    }
+
+    int32_t snapshot_into(T out[], int32_t maxLen) {
+        int len {};
+        if (maxLen < this->count) {
+            len = maxLen;
+        } else {
+            len = this->count;
+        }
+
+        Node* temp = this->top;
+        for (int i = 0; i < len; i++) {
+            out[i] = temp->data;
+            temp = temp->next;
+        } return len;
     }
 };
-
 
 // Timeline : doubly linked list of Snapshots
 struct Snapshot; // fwd declaration;
