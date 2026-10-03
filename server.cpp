@@ -126,37 +126,52 @@ public:
     }
 };
 
-// Timeline : doubly linked list of Snapshots
-struct Snapshot; // fwd declaration;
-struct TimelineNode
-{
+struct Snapshot;
+
+struct TimelineNode {
     Snapshot *data;
     TimelineNode *next;
     TimelineNode *prev;
 };
-class Timeline
-{
+
+class Timeline {
     TimelineNode *head, *tail;
     int32_t stepCount;
 
 public:
-    // Implement these functions
-    Timeline()
-    {
+    Timeline() {
+        this->head = nullptr;
+        this->tail = nullptr;
+        this->stepCount = 0;
     }
-    void record(Snapshot *s)
-    {
-        // add record in the timeline
+
+    void record(Snapshot *s) {
+        TimelineNode* temp = new TimelineNode();
+        temp->data = s;
+        temp->next = nullptr;
+        temp->prev = this->tail;
+
+        if (this->stepCount == 0) {
+            this->head = temp;
+            this->tail = temp;
+            this->stepCount ++;
+            return;
+        } 
+
+        this->tail->next = temp;
+        this->tail = temp;
+        this->stepCount ++;
     }
-    TimelineNode *begin()
-    {
+    
+    TimelineNode *begin() {
+        return this->head;
     }
-    int32_t getStepCount()
-    {
+
+    int32_t getStepCount() {
+        return this->stepCount;
     }
 };
 
-// Core structs
 struct Variable
 {
     string name;
