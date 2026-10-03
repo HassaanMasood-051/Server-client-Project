@@ -1,1 +1,3 @@
 I've implemented the stack and timeline now im trying to implement the fuctions or next classes ....
+
+Just wrote the ValideProgram function

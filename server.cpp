@@ -16,6 +16,7 @@
 #include <sys/socket.h>
 #include <cstdint>
 #include <cstdio>
+#include <vector>
 using namespace std;
 
 // ---- Constants ----
@@ -233,9 +234,59 @@ string secondWord(const string &line)
 {
     // returns the second word
 }
-bool validateProgram(const char *sourcePath)
-{
-    // for each func defined there should be exactly one func_end and no nested funcs allowed - 
+
+bool validateProgram(const char *sourcePath) {
+    ifstream read (sourcePath);
+    if (!read) {
+        cout << "Err:: Opening File.\n";
+        return false;
+    }
+
+    vector <string> words;
+    words.push_back ("");
+    int num_of_words {};
+
+    string line = "";
+    while (getline (read,line)) {
+        for (int i = 0; i < line.size(); i++) {
+            if (line[i] == ' ' || line[i] == '\t') {
+                if (words[num_of_words] != "") {
+                    words.push_back("");
+                    num_of_words++;
+                }
+            } else {
+                words[num_of_words].push_back(line[i]);
+            } 
+        } line = "";
+
+        if (words[num_of_words] != "") {
+            words.push_back("");
+            num_of_words++;
+        }
+    }
+
+    Stack <int> stk;
+    for (int i = 0; i < words.size(); i++) {
+        if (words[i] == "func") {
+            if (!stk.isEmpty() && stk.peek() == 1) {
+                return false;
+            } else {
+                stk.push(1);
+            }
+        } else if (words[i] == "func_end") {
+            if (!stk.isEmpty() && stk.peek() == 1) {
+                stk.pop();
+            } else {
+                return false;
+            }
+        }
+    } 
+    
+    if (stk.isEmpty()) {
+        return true;
+    } else {
+        return false;
+    }
 }
 
 // PASS 0x1: RESOLVE() -> resolve.bin
