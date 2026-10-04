@@ -1,0 +1,8 @@
+[0x0] [10] "func foo b"
+[0x16] [8] "set a 10"
+[0x2a] [7] "add b a"
+[0x3d] [8] "func_end"
+[0x51] [9] "func main"
+[0x66] [8] "set k 10"
+[0x7a] [17] "call 0x00000000 k"
+[0x97] [8] "func_end"

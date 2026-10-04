@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 using namespace std;
 
 // ---- Constants ----
@@ -207,33 +209,20 @@ void writeHeader(FILE *f, const TTDBHeader &h)
     // placeholder for other two data members
 }
 
-// resolve.bin - bookkeeping
-struct FuncEntry
-{
+struct FuncEntry {
     string funcName;
-    int64_t byteOffsetInResolveBin; // where this function's FUNC header record sits
+    int64_t byteOffsetInResolveBin;
+
+    FuncEntry () {
+        this->funcName = "NULL";
+        this->byteOffsetInResolveBin = 0x0;
+    }
+
+    FuncEntry (string _funcName, int64_t __byte) {
+        this->funcName = _funcName;
+        this->byteOffsetInResolveBin = __byte;
+    }
 };
-struct PendingPatch
-{
-    int64_t byteOffsetOfOffsetField; // where in resolve.bin to seek back and overwrite
-    string targetFuncName;
-};
-
-
-
-// PASS 0x0: READING source.bin + VALIDITY CHECK
-bool readSourceLine(ifstream &in, string &out)
-{
-    // reads the next nonblank line
-}
-string firstWord(const string &line)
-{
-    // returns first word from the input string
-}
-string secondWord(const string &line)
-{
-    // returns the second word
-}
 
 bool validateProgram(const char *sourcePath) {
     ifstream read (sourcePath);
@@ -289,33 +278,153 @@ bool validateProgram(const char *sourcePath) {
     }
 }
 
-// PASS 0x1: RESOLVE() -> resolve.bin
-int64_t writeResolveRecord(FILE *f, int64_t offsetField, const string &text)
-{
-    // writes one [offset(8B)][size(4B)][string] record at the current file position
-    // returns this record's own starting byte position
-}
-int64_t readResolveRecord(FILE *f, string &outText)
-{
-    // reads one record at the current position and advances past it, returns the offset field - the raw line text comes back untouched in outText.
-}
-int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath)
-{
+int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
     FuncEntry funcArray[MAX_FUNCS];
     int32_t funcCount = 0;
-    PendingPatch patches[MAX_PATCHES];
-    int32_t patchCount = 0;
-    // Every source line becomes one record holding the raw line, as-is.
-    // resolve() only PEEKS at the leading word(s) -- enough to spot FUNC
-    // (remember its position) and CALL (remember which function it needs
-    // and where its offset field sits).
-    // Once the whole file is written, every CALL's offset field is patched
-    // with its target's position. Patching happens after the full write
-    // Returns the byte offset of main's FUNC header record.
-    // if there is no main return the error 
+    
+    ifstream read (sourcePath);
+    if (!read) {
+        cout << "Err:: Opening file.\n";
+        return 0;
+    } 
+    vector <string> lines;
+    string tempray;
+
+    while (getline(read, tempray)) {
+        if (tempray.find_first_not_of(" \t\r") != string::npos) {
+        lines.push_back(tempray);
+    }
+    } 
+    read.close();
+
+    vector <int64_t> offsets;
+    int64_t start = 0x0;
+    for (int i = 0; i < lines.size(); i++) {
+        vector <string> words (1);
+        int num_of_words {};
+        for (int j = 0; j < lines[i].size(); j++) {
+            if (lines[i][j] == ' ' || lines[i][j] == '\t' || lines[i][j] == '\r') {
+                if (!words[num_of_words].empty()) {
+                    words.push_back("");
+                    num_of_words++;
+                }
+            } else {
+                words[num_of_words].push_back(lines[i][j]);
+            }
+        } if (words[num_of_words].empty()) {
+            words.pop_back();
+        }
+
+        string temp = "";
+        for (int ct = 0; ct < words.size(); ct++) {
+            if (words[ct] == "call" && (ct + 1) < words.size()) {
+                temp += "call 0x00000000";
+                ct++;
+            } else {
+                temp += words[ct];
+            }
+            if (ct + 1 < words.size()) {
+                temp.push_back(' ');
+            }
+        }
+        offsets.push_back (start);
+        start = start + temp.size() + 8 + 4;
+    }
+
+    for (int i = 0; i < lines.size(); i++) {
+        vector <string> words (1);
+        int num_of_words {};
+        for (int j = 0; j < lines[i].size(); j++) {
+            if (lines[i][j] == ' ' || lines[i][j] == '\t' || lines[i][j] == '\r') {
+                if (!words[num_of_words].empty()) {
+                    words.push_back("");
+                    num_of_words++;
+                }
+            } else {
+                words[num_of_words].push_back(lines[i][j]);
+            }
+        } if (words[num_of_words].empty()) {
+            words.pop_back();
+        } if (words.empty()) {
+            continue;
+        }
+
+        for (int x = 0; x < words.size(); x++) {
+            if (words[x] == "func" && x+1 != words.size()) {
+                FuncEntry temp (words[x+1],offsets[i]); 
+                funcArray [funcCount ++] = temp;
+            }
+        }
+    }
+
+    vector <string> final_lines;
+    for (int i = 0; i < lines.size(); i++) {
+        vector <string> words (1);
+        int num_of_words {};
+        for (int j = 0; j < lines[i].size(); j++) {
+            if (lines[i][j] == ' ' || lines[i][j] == '\t' || lines[i][j] == '\r') {
+                if (!words[num_of_words].empty()) {
+                    words.push_back("");
+                    num_of_words++;
+                }
+            } else {
+                words[num_of_words].push_back(lines[i][j]);
+            }
+        } if (words[num_of_words].empty()) {
+            words.pop_back();
+        } if (words.empty()) {
+            continue;
+        }
+
+        string toPush = "";
+        for (int ct = 0; ct < words.size(); ct++) {
+            if (words[ct] == "call" && (ct + 1) < words.size()) {
+                toPush += "call ";
+                string targetName = words[ct + 1];
+                int64_t targetOffset = -1;
+                for (int f = 0; f < funcCount; f++) {
+                    if (funcArray[f].funcName == targetName) {
+                        targetOffset = funcArray[f].byteOffsetInResolveBin;
+                        break;
+                    }
+                }
+                stringstream ss;
+                ss << "0x" << hex << setw(8) << setfill('0') << targetOffset;
+                toPush += ss.str();
+
+                ct++;
+            } else {
+                toPush += words[ct];
+            }
+
+            if (ct + 1 < words.size()) {
+                toPush.push_back(' ');
+            }
+        } 
+        final_lines.push_back(toPush);
+    }
+
+    ofstream write (resolveBinPath);
+    if (!write) {
+        cout << "Err:: Opening File.\n";
+        return 0;
+    }
+
+    for (int i = 0; i < final_lines.size(); i++) {
+        write << "[0x" << hex << offsets[i] << dec << "] ["
+            << final_lines[i].size() << "] \"" << final_lines[i] << "\"" << endl;
+    }
+    write.close();
+
+    for (int i = 0; i < funcCount; i++) {
+        if (funcArray[i].funcName == "main") {
+            return funcArray[i].byteOffsetInResolveBin;
+        }
+    } cout << "Unknown Function.\n";
+
+    return -1;
 }
 
-// PASS 0x2: EXECUTION (tokenization happens here)
 enum TokenType
 {
     KEYWORD,
