@@ -1,13 +1,3 @@
-// ======================= TIME-TRAVEL DEBUGGER - SERVER TEMPLATE =======================
-
-// Pipeline this file implements, top to bottom:
-//   0. Receive  -- stream the client's .trace bytes straight to source.bin on disk
-//   1. Pass 0X0   -- validity check (FUNC/FUNC_END matching)
-//   2. Pass 0X1   -- resolve(): copy EVERY source line into resolve.bin as [offset][size][string], then patch CALL targets.
-//   3. Pass 0X2   -- execute resolve.bin: tokenize ONE line at a time, update the call stack, take a snapshot -> Timeline
-//   4. Pass 0X3   -- serialize Timeline -> session.tdbg(header + snapshot records + dense index)
-
-
 #include <iostream>
 #include <string>
 #include <cstdint>
@@ -21,17 +11,14 @@
 #include <iomanip>
 using namespace std;
 
-// ---- Constants ----
 const int32_t MAX_VARS_PER_FRAME = 16;
 const int32_t MAX_STACK_DEPTH = 64;
 const int32_t MAX_FUNCS = 128;
-const int32_t MAX_TOKENS = MAX_VARS_PER_FRAME + 2; // kW + func_name + upto 16 params/args
+const int32_t MAX_TOKENS = MAX_VARS_PER_FRAME + 2;
 const int32_t MAX_PATCHES = MAX_FUNCS * 4;
-const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024; // sanity cap on the declared file length
-const int32_t IO_BUFFER_SIZE = 64 * 1024;                  // fixed buffer for streaming to/from disk
-const int32_t SOCKET_TIMEOUT_SEC = 5;                      // TODO: apply as SO_RCVTIMEO so a deadclient can't hang the server forever
-
-// ---- Custom data structures
+const uint64_t MAX_SOURCE_BYTES = 15ULL * 1024 * 1024;
+const int32_t IO_BUFFER_SIZE = 64 * 1024;
+const int32_t SOCKET_TIMEOUT_SEC = 5;
 
 template <typename T>
 class Stack {
@@ -423,6 +410,90 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
     } cout << "Unknown Function.\n";
 
     return -1;
+}
+
+bool convertTextToBinaryResolve(const char *textPath, const char *binaryPath) {
+    ifstream read(textPath);
+    ofstream write(binaryPath, ios::binary);
+
+    if (!read) {
+        cout << "Err:: Opening File.\n";
+        return false;
+    }
+
+    string line = "";
+    while (getline(read, line)) {
+        if (line.empty()) {
+            continue;
+        }
+
+        int startOff = -1;
+        int endOff = -1;
+        for (int i = 0; i < line.size(); i++) {
+            if (line[i] == 'x' && i > 0 && line[i-1] == '0') {
+                startOff = i + 1;
+            } else if (line[i] == ']' && startOff != -1 && endOff == -1) {
+                endOff = i;
+                break;
+            }
+        }
+
+        int startSize = -1;
+        int endSize = -1;
+        for (int i = endOff; i < line.size(); i++) {
+            if (line[i] == '[') {
+                startSize = i + 1;
+            } else if (line[i] == ']' && startSize != -1) {
+                endSize = i;
+                break;
+            }
+        }
+
+        int startStr = -1;
+        int endStr = -1;
+        for (int i = endSize; i < line.size(); i++) {
+            if (line[i] == '"') {
+                if (startStr == -1) {
+                    startStr = i + 1;
+                } else {
+                    endStr = i;
+                    break;
+                }
+            }
+        }
+
+        if (startOff == -1 || startSize == -1 || startStr == -1) {
+            continue;
+        }
+
+        string offStr = "";
+        for (int i = startOff; i < endOff; i++) {
+            offStr.push_back(line[i]);
+        }
+
+        string szStr = "";
+        for (int i = startSize; i < endSize; i++) {
+            szStr.push_back(line[i]);
+        }
+
+        string codeStr = "";
+        for (int i = startStr; i < endStr; i++) {
+            codeStr.push_back(line[i]);
+        }
+
+        int64_t offset = stoll(offStr, nullptr, 16);
+        int32_t strSize = stoi(szStr);
+
+        write.write((char*)&offset, sizeof(int64_t));
+        write.write((char*)&strSize, sizeof(int32_t));
+        for (int i = 0; i < codeStr.size(); i++) {
+            write.write(&codeStr[i], sizeof(char));
+        }
+    }
+
+    read.close();
+    write.close();
+    return true;
 }
 
 enum TokenType
