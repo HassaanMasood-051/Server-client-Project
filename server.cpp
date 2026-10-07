@@ -496,24 +496,56 @@ bool convertTextToBinaryResolve(const char *textPath, const char *binaryPath) {
     return true;
 }
 
-enum TokenType
-{
+enum TokenType {
     KEYWORD,
     IDENTIFIER,
     PARAM
 };
-struct Token
-{
+
+struct Token {
     TokenType type;
     string text;
+
+    Token (TokenType _type, string _text) {
+        this->type = _type;
+        this->text = _text;
+    }
 };
-int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens)
-{
-    // first word is always a instruction keyword
-    // instruction set = [func, func_end, call, set, add, sub, mul and div]
-    // next word is identifier like name of a function, variable name
-    // after identifier all are the params/arg, space separated
+
+int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens) {
+    vector <string> words (1);
+    int num_of_words {};
+
+    for (int i = 0; i < line.size(); i++) {
+        if (line[i] == ' ' || line[i] == '\t' || line[i] == '\r') {
+            if (!words[num_of_words].empty()) {
+                words.push_back("");
+                num_of_words++;
+            }
+        } else {
+            words[num_of_words].push_back(line[i]);
+        }
+    } if (words[num_of_words].empty()) {
+        words.pop_back();
+    } else {
+        num_of_words++;
+    }
+
+    int ct {};
+    for (int i = 0; i < num_of_words && i < maxTokens; i++) {
+        if (i == 0) {
+            Token tkn (KEYWORD,words[i]);
+            tokens[ct++] = tkn; 
+        } else if (i == 1) {
+            Token tkn (IDENTIFIER,words[i]);
+            tokens[ct++] = tkn; 
+        } else {
+            Token tkn (PARAM,words[i]);
+            tokens[ct++] = tkn; 
+        }
+    } return ct;
 }
+
 Snapshot *buildSnapshot(Stack<Frame> &callStack)
 {
     // build the snapshot based on the callStack given
