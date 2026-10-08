@@ -162,13 +162,12 @@ public:
     }
 };
 
-struct Variable
-{
+struct Variable {
     string name;
     int32_t value;
 };
-struct Frame
-{
+
+struct Frame {
     string func_name;
     int32_t argc;
     Variable argv[MAX_VARS_PER_FRAME];
@@ -176,11 +175,12 @@ struct Frame
     Variable locals[MAX_VARS_PER_FRAME];
     int32_t localCount;
 };
-struct Snapshot
-{
+
+struct Snapshot {
     Frame callStack[MAX_STACK_DEPTH];
     int32_t stackDepth;
 };
+
 struct TTDBHeader
 {
     char magic[4]; // "TTDB"
@@ -272,15 +272,15 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
     ifstream read (sourcePath);
     if (!read) {
         cout << "Err:: Opening file.\n";
-        return 0;
+        return -1;
     } 
     vector <string> lines;
     string tempray;
 
     while (getline(read, tempray)) {
         if (tempray.find_first_not_of(" \t\r") != string::npos) {
-        lines.push_back(tempray);
-    }
+            lines.push_back(tempray);
+        }
     } 
     read.close();
 
@@ -337,7 +337,13 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
         }
 
         for (int x = 0; x < words.size(); x++) {
-            if (words[x] == "func" && x+1 != words.size()) {
+            // FIX: only the first word can be the "func" keyword
+            if (x == 0 && words[x] == "func" && x+1 != words.size()) {
+                // FIX: bounds check so funcArray can't overflow
+                if (funcCount >= MAX_FUNCS) {
+                    cout << "Err:: Too many functions.\n";
+                    return -1;
+                }
                 FuncEntry temp (words[x+1],offsets[i]); 
                 funcArray [funcCount ++] = temp;
             }
@@ -375,6 +381,11 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
                         break;
                     }
                 }
+                // FIX: call to an undefined function is an error
+                if (targetOffset == -1) {
+                    cout << "Err:: Call to undefined function '" << targetName << "'.\n";
+                    return -1;
+                }
                 stringstream ss;
                 ss << "0x" << hex << setw(8) << setfill('0') << targetOffset;
                 toPush += ss.str();
@@ -394,7 +405,7 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
     ofstream write (resolveBinPath);
     if (!write) {
         cout << "Err:: Opening File.\n";
-        return 0;
+        return -1;
     }
 
     for (int i = 0; i < final_lines.size(); i++) {
@@ -413,85 +424,41 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
 }
 
 bool convertTextToBinaryResolve(const char *textPath, const char *binaryPath) {
-    ifstream read(textPath);
-    ofstream write(binaryPath, ios::binary);
-
+    ifstream read (textPath);
+    ofstream write (binaryPath, ios::binary);
     if (!read) {
-        cout << "Err:: Opening File.\n";
+        cout << "Err:: Opening file.\n";
+        return false;
+    } if (!write) {
+        cout << "Err:: Opening file.\n";
         return false;
     }
 
-    string line = "";
-    while (getline(read, line)) {
-        if (line.empty()) {
-            continue;
-        }
+    int64_t offset{};
+    int32_t size{};
+    char temp{};
+    string code;
 
-        int startOff = -1;
-        int endOff = -1;
-        for (int i = 0; i < line.size(); i++) {
-            if (line[i] == 'x' && i > 0 && line[i-1] == '0') {
-                startOff = i + 1;
-            } else if (line[i] == ']' && startOff != -1 && endOff == -1) {
-                endOff = i;
-                break;
-            }
-        }
+    while (read >> temp) {
+        read >> hex >> offset;
+        read >> temp;
 
-        int startSize = -1;
-        int endSize = -1;
-        for (int i = endOff; i < line.size(); i++) {
-            if (line[i] == '[') {
-                startSize = i + 1;
-            } else if (line[i] == ']' && startSize != -1) {
-                endSize = i;
-                break;
-            }
-        }
+        read >> temp;
+        read >> dec >> size;
+        read >> temp;
 
-        int startStr = -1;
-        int endStr = -1;
-        for (int i = endSize; i < line.size(); i++) {
-            if (line[i] == '"') {
-                if (startStr == -1) {
-                    startStr = i + 1;
-                } else {
-                    endStr = i;
-                    break;
-                }
-            }
-        }
+        read >> ws;
+        getline(read, code);
+        code.erase(0, 1);
+        code.pop_back();
 
-        if (startOff == -1 || startSize == -1 || startStr == -1) {
-            continue;
-        }
-
-        string offStr = "";
-        for (int i = startOff; i < endOff; i++) {
-            offStr.push_back(line[i]);
-        }
-
-        string szStr = "";
-        for (int i = startSize; i < endSize; i++) {
-            szStr.push_back(line[i]);
-        }
-
-        string codeStr = "";
-        for (int i = startStr; i < endStr; i++) {
-            codeStr.push_back(line[i]);
-        }
-
-        int64_t offset = stoll(offStr, nullptr, 16);
-        int32_t strSize = stoi(szStr);
+        size = code.size();
 
         write.write((char*)&offset, sizeof(int64_t));
-        write.write((char*)&strSize, sizeof(int32_t));
-        for (int i = 0; i < codeStr.size(); i++) {
-            write.write(&codeStr[i], sizeof(char));
-        }
+        write.write((char*)&size, sizeof(int32_t));
+        write.write(code.c_str(), size);
     }
 
-    read.close();
     write.close();
     return true;
 }
@@ -546,18 +513,15 @@ int32_t tokenizeLine(const string &line, Token tokens[], int32_t maxTokens) {
     } return ct;
 }
 
-Snapshot *buildSnapshot(Stack<Frame> &callStack)
-{
-    // build the snapshot based on the callStack given
+Snapshot *buildSnapshot(Stack <Frame> &callStack) {
+    Snapshot* temp = new Snapshot ();
+    temp->stackDepth = callStack.snapshot_into (temp->callStack, MAX_STACK_DEPTH);
+    return temp;
 }
-void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &timeline)
-{
-    // initialize the call stack
-    // make the main frame
-    // push main frame on the call stack
 
-    // implementation:
-    // execute line by line, and according to the keyword perform action
+void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &timeline) {
+    ifstream read (resolveBinPath, ios::binary);
+
 }
 
 // PASS 0x3: SERIALIZE TIMELINE
@@ -579,7 +543,13 @@ int32_t main()
         return 1;
     }
 
-    int64_t mainOffset = resolveProgram("source.bin", "resolve.bin");
+    int64_t mainOffset = resolveProgram("source.bin", "resolve.txt");
+    if (mainOffset == -1) {
+        return 1;
+    }
+    if (!convertTextToBinaryResolve("resolve.txt", "resolve.bin")) {
+        return 1;
+    }
 
     Timeline timeline;
     executeProgram("resolve.bin", mainOffset, timeline);
