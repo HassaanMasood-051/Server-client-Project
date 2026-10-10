@@ -9,6 +9,7 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <cinttypes>
 using namespace std;
 
 const int32_t MAX_VARS_PER_FRAME = 16;
@@ -188,12 +189,12 @@ struct TTDBHeader
     int32_t stepCount;
     int64_t indexOffset;
 };
+
 void writeHeader(FILE *f, const TTDBHeader &h)
 {
     fwrite(h.magic, 1, 4, f);
     fwrite(&h.version, sizeof(int32_t), 1, f);
 
-    // placeholder for other two data members
 }
 
 struct FuncEntry {
@@ -269,7 +270,7 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
     FuncEntry funcArray[MAX_FUNCS];
     int32_t funcCount = 0;
     
-    ifstream read (sourcePath);
+    FILE *read = fopen(sourcePath, "r");
     if (!read) {
         cout << "Err:: Opening file.\n";
         return -1;
@@ -277,12 +278,21 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
     vector <string> lines;
     string tempray;
 
-    while (getline(read, tempray)) {
+    while (true) {
+        tempray.clear();
+        int ch = fgetc(read);
+        if (ch == EOF) {
+            break;
+        }
+        while (ch != EOF && ch != '\n') {
+            tempray.push_back((char)ch);
+            ch = fgetc(read);
+        }
         if (tempray.find_first_not_of(" \t\r") != string::npos) {
             lines.push_back(tempray);
         }
     } 
-    read.close();
+    fclose(read);
 
     vector <int64_t> offsets;
     int64_t start = 0x0;
@@ -337,9 +347,7 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
         }
 
         for (int x = 0; x < words.size(); x++) {
-            // FIX: only the first word can be the "func" keyword
             if (x == 0 && words[x] == "func" && x+1 != words.size()) {
-                // FIX: bounds check so funcArray can't overflow
                 if (funcCount >= MAX_FUNCS) {
                     cout << "Err:: Too many functions.\n";
                     return -1;
@@ -381,7 +389,6 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
                         break;
                     }
                 }
-                // FIX: call to an undefined function is an error
                 if (targetOffset == -1) {
                     cout << "Err:: Call to undefined function '" << targetName << "'.\n";
                     return -1;
@@ -402,17 +409,17 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
         final_lines.push_back(toPush);
     }
 
-    ofstream write (resolveBinPath);
+    FILE *write = fopen(resolveBinPath, "w");
     if (!write) {
         cout << "Err:: Opening File.\n";
         return -1;
     }
 
     for (int i = 0; i < final_lines.size(); i++) {
-        write << "[0x" << hex << offsets[i] << dec << "] ["
-            << final_lines[i].size() << "] \"" << final_lines[i] << "\"" << endl;
+        fprintf(write, "[0x%" PRIx64 "] [%zu] \"%s\"\n",
+                (uint64_t)offsets[i], final_lines[i].size(), final_lines[i].c_str());
     }
-    write.close();
+    fclose(write);
 
     for (int i = 0; i < funcCount; i++) {
         if (funcArray[i].funcName == "main") {
@@ -424,13 +431,15 @@ int64_t resolveProgram(const char *sourcePath, const char *resolveBinPath) {
 }
 
 bool convertTextToBinaryResolve(const char *textPath, const char *binaryPath) {
-    ifstream read (textPath);
-    ofstream write (binaryPath, ios::binary);
+    FILE *read = fopen(textPath, "r");
+    FILE *write = fopen(binaryPath, "wb");
     if (!read) {
         cout << "Err:: Opening file.\n";
+        if (write) fclose(write);
         return false;
     } if (!write) {
         cout << "Err:: Opening file.\n";
+        fclose(read);
         return false;
     }
 
@@ -439,27 +448,34 @@ bool convertTextToBinaryResolve(const char *textPath, const char *binaryPath) {
     char temp{};
     string code;
 
-    while (read >> temp) {
-        read >> hex >> offset;
-        read >> temp;
+    while (fscanf(read, " %c", &temp) == 1) {
+        fscanf(read, "%" SCNx64, (uint64_t*)&offset);
+        fscanf(read, " %c", &temp);
 
-        read >> temp;
-        read >> dec >> size;
-        read >> temp;
+        fscanf(read, " %c", &temp);
+        fscanf(read, "%" SCNd32, &size);
+        fscanf(read, " %c", &temp);
 
-        read >> ws;
-        getline(read, code);
+        fscanf(read, " ");
+
+        code.clear();
+        int ch = fgetc(read);
+        while (ch != EOF && ch != '\n') {
+            code.push_back((char)ch);
+            ch = fgetc(read);
+        }
         code.erase(0, 1);
         code.pop_back();
 
         size = code.size();
 
-        write.write((char*)&offset, sizeof(int64_t));
-        write.write((char*)&size, sizeof(int32_t));
-        write.write(code.c_str(), size);
+        fwrite(&offset, sizeof(int64_t), 1, write);
+        fwrite(&size, sizeof(int32_t), 1, write);
+        fwrite(code.c_str(), 1, size, write);
     }
 
-    write.close();
+    fclose(write);
+    fclose(read);
     return true;
 }
 
@@ -472,6 +488,11 @@ enum TokenType {
 struct Token {
     TokenType type;
     string text;
+
+    Token () {
+        this->type = KEYWORD;
+        this->text = "";
+    }
 
     Token (TokenType _type, string _text) {
         this->type = _type;
@@ -520,11 +541,48 @@ Snapshot *buildSnapshot(Stack <Frame> &callStack) {
 }
 
 void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &timeline) {
-    ifstream read (resolveBinPath, ios::binary);
+    FILE *read = fopen(resolveBinPath, "rb");
+    if (!read) {
+        cout << "Err:: Opening file.\n";
+        return;
+    }
 
+    vector <int64_t> offsets;
+    vector <string> lines;
+
+    int64_t offset {};
+    int32_t size {};
+
+    while (fread(&offset, sizeof(int64_t), 1, read) == 1) {
+        fread(&size, sizeof(int32_t), 1, read);
+
+        string code (size, ' ');
+        fread(&code[0], 1, size, read);
+
+        offsets.push_back(offset);
+        lines.push_back(code);
+    }
+    fclose(read);
+
+    int ip = 0;
+    for (int i = 0; i < offsets.size(); i++) {
+        if (offsets[i] == mainOffset) {
+            ip = i;
+            break;
+        }
+    }
+
+    Stack <Frame> callStack;
+    Frame mainFrame;
+    mainFrame.func_name = "main";
+    mainFrame.argc = 0;
+    mainFrame.returnLine = -1;
+    mainFrame.localCount = 0;
+    callStack.push(mainFrame);
+
+    
 }
 
-// PASS 0x3: SERIALIZE TIMELINE
 void writeTdbg(Timeline &timeline, const char *tdbgPath)
 {
     // placeholder for header

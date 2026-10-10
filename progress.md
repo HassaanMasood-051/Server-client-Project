@@ -12,4 +12,7 @@ Date: 7/10/26 Added The Binary filing fuction (Last 2 days there was a lot of un
 
 Date: 7/10/26 Added Tokenize_Line fucntion
 
-Date: 8/10/26 Fixed the Binary filing somehow.
+Date: 8/10/26 Fixed the Binary filing somehow and added a test file to check if my stuff works.
+
+Date: 10/10/26 I forgot to commit my changes yesterday so its a commit for 9/10/26 Ive changed resoveProgram and binary fuction into C filing and wrote initial steps of resolve program
+
