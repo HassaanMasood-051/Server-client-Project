@@ -546,10 +546,8 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
         cout << "Err:: Opening file.\n";
         return;
     }
-
     vector <int64_t> offsets;
     vector <string> lines;
-
     int64_t offset {};
     int32_t size {};
 
@@ -561,8 +559,7 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
 
         offsets.push_back(offset);
         lines.push_back(code);
-    }
-    fclose(read);
+    } fclose(read);
 
     int ip = 0;
     for (int i = 0; i < offsets.size(); i++) {
@@ -574,13 +571,136 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
 
     Stack <Frame> callStack;
     Frame mainFrame;
-    mainFrame.func_name = "main";
-    mainFrame.argc = 0;
     mainFrame.returnLine = -1;
+    mainFrame.argc = 0;
     mainFrame.localCount = 0;
+    mainFrame.func_name = "main";
     callStack.push(mainFrame);
 
-    
+    while (!callStack.isEmpty()) {
+        if (ip >= lines.size()) {
+            cout << "Err:: Program just went past the last line.\n";
+            break;
+        }
+ 
+        Token tokens[MAX_TOKENS];
+        int n = tokenizeLine(lines[ip], tokens, MAX_TOKENS);
+ 
+        if (tokens[0].text == "set") {
+            Frame &frm = callStack.peek();
+ 
+            int where = 0;
+            int idx = -1;
+            for (int i = 0; i < frm.argc; i++) {
+                if (frm.argv[i].name == tokens[1].text) {
+                    where = 1;
+                    idx = i;
+                }
+            } for (int i = 0; i < frm.localCount; i++) {
+                if (frm.locals[i].name == tokens[1].text) {
+                    where = 2;
+                    idx = i;
+                }
+            }
+ 
+            if (where == 0) {
+                frm.locals[frm.localCount].name = tokens[1].text;
+                where = 2;
+                idx = frm.localCount;
+                frm.localCount++;
+            }
+ 
+            int32_t val = 0;
+            bool found = false;
+            for (int i = 0; i < frm.argc; i++) {
+                if (frm.argv[i].name == tokens[2].text) {
+                    val = frm.argv[i].value;
+                    found = true;
+                }
+            } for (int i = 0; i < frm.localCount; i++) {
+                if (frm.locals[i].name == tokens[2].text) {
+                    val = frm.locals[i].value;
+                    found = true;
+                }
+            } if (found == false) {
+                val = stoi(tokens[2].text);
+            } if (where == 1) {
+                frm.argv[idx].value = val;
+            } else {
+                frm.locals[idx].value = val;
+            }
+            ip++;
+        }
+        else if (tokens[0].text == "add" || tokens[0].text == "sub" || tokens[0].text == "mul" || tokens[0].text == "div") {
+            Frame &frme = callStack.peek();
+ 
+            int where = 0;
+            int idx = -2;
+            for (int i = 0; i < frme.argc; i++) {
+                if (frme.argv[i].name == tokens[1].text) {
+                    where = 1;
+                    idx = i;
+                }
+            } for (int i = 0; i < frme.localCount; i++) {
+                if (frme.locals[i].name == tokens[1].text) {
+                    where = 2;
+                    idx = i;
+                }
+            }
+
+            if (where == 0) {
+                cout << "Err:: Variable with the name of '" << tokens[1].text << "' is not defined.\n";
+                break;
+            }
+ 
+            int32_t first {};
+            if (where == 1) {
+                first = frme.argv[idx].value;
+            } else {
+                first = frme.locals[idx].value;
+            }
+ 
+            int32_t second {};
+            bool found = false;
+            for (int i = 0; i < frme.argc; i++) {
+                if (frme.argv[i].name == tokens[2].text) {
+                    second = frme.argv[i].value;
+                    found = true;
+                }
+            } for (int i = 0; i < frme.localCount; i++) {
+                if (frme.locals[i].name == tokens[2].text) {
+                    second = frme.locals[i].value;
+                    found = true;
+                }
+            }
+            if (found == false) {
+                second = stoi(tokens[2].text);
+            }
+ 
+            int32_t result = 0;
+            if (tokens[0].text == "add") {
+                result = first+ second;
+            } else if (tokens[0].text == "sub") {
+                result = first -second;
+            } else if (tokens[0].text == "mul") {
+                result = first*second;
+            } else {
+                if (second == 0) {
+                    cout << "Err:: You can't divde by zero.\n";
+                    break;
+                }
+                result = first/second;
+            }
+ 
+            if (where == 1) {
+                frme.argv[idx].value = result;
+            } else {
+                frme.locals[idx].value = result;
+            }
+            ip++;
+        }
+        timeline.record(buildSnapshot(callStack));
+    }
 }
 
 void writeTdbg(Timeline &timeline, const char *tdbgPath)
