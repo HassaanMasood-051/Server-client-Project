@@ -699,6 +699,90 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
             }
             ip++;
         }
+        else if (tokens[0].text == "call") {
+            if (callStack.depth() >= MAX_STACK_DEPTH) { // I added this fix after searching from google ToT mx stack depth is 64
+                cout << "Err:: Memory overflow.\n";
+                break;
+            }
+
+            int64_t target = stoll(tokens[1].text, nullptr, 16); // Searched this syntax from Online and what i learned was "int32_t is normal int but int64_t is long long in windows and macOS but in linux its long so i decided to write stoi but then asked Chatgpt what to use stoi or stoll it said stoll was better i didnt do more search on it"
+            int indx = -1;
+            for (int i = 0; i < offsets.size(); i++) {
+                if (offsets[i] == target) {
+                    indx = i;
+                    break;
+                }
+            }
+            if (indx == -1) {
+                cout << "Err:: Such funtion never existed.\n";
+                break;
+            }
+
+            Token tkns[MAX_TOKENS];
+            int fn = tokenizeLine(lines[indx], tkns, MAX_TOKENS);
+
+            if (n != fn) { 
+                cout << "Err:: Wrong number of Arguments for \"" << tkns[1].text << "\".\n";
+                break;
+            }
+
+            Frame &prev = callStack.peek();
+
+            Frame nw_Frm;
+            nw_Frm.func_name = tkns[1].text;
+            nw_Frm.argc = fn - 2; // 1+1 (1 = func, 1 = functions' Name so param's r num_of_words - 2)
+            nw_Frm.localCount = 0;
+            nw_Frm.returnLine = ip + 1;
+
+            for (int x = 0; x < nw_Frm.argc; x++) {
+                nw_Frm.argv[x].name = tkns[x+2].text;
+                nw_Frm.argv[x].value = 0;
+
+                bool found = false;
+                for (int i = 0; i < prev.argc; i++) {
+                    if (prev.argv[i].name == tokens[x+2].text) {
+                        nw_Frm.argv[x].value = prev.argv[i].value;
+                        found = true;
+                    }
+                } for (int i = 0; i <prev.localCount; i++) {
+                    if (prev.locals[i].name == tokens[x+2].text) {
+                        nw_Frm.argv[x].value = prev.locals[i].value;
+                        found = true;
+                    }
+                }
+                if (found == false) {
+                    nw_Frm.argv[x].value = stoi(tokens[x+2].text);
+                }
+            }
+            callStack.push(nw_Frm);
+            ip = indx + 1;
+        }
+        else if (tokens[0].text == "func_end") {
+            Frame done = callStack.pop();
+            if (!callStack.isEmpty()) {
+                Token callTokens[MAX_TOKENS];
+                int cn = tokenizeLine(lines[done.returnLine - 1], callTokens, MAX_TOKENS);
+ 
+                Frame &caller = callStack.peek();
+                for (int x = 0; x < done.argc; x++) {
+                    if (x+2 < cn) {
+                        for (int i = 0; i < caller.argc; i++) {
+                            if (caller.argv[i].name == callTokens[x+2].text) {
+                                caller.argv[i].value = done.argv[x].value;
+                            }
+                        }
+                        for (int i = 0; i < caller.localCount; i++) {
+                            if (caller.locals[i].name == callTokens[x+2].text) {
+                                caller.locals[i].value = done.argv[x].value;
+                            }
+                        }
+                    }
+                } ip = done.returnLine;
+            }
+        }
+        else {
+            ip++;
+        }
         timeline.record(buildSnapshot(callStack));
     }
 }

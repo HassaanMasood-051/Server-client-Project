@@ -18,3 +18,4 @@ Date: 10/10/26 I forgot to commit my changes yesterday so its a commit for 9/10/
 
 Date: 11/10/26 I did the add sub stuff and set stuff in execute program this morning .... call and func end is left and im workin'' on it rn will do a push soon Inhsllah ToT
 
+Date: 11/10/26 Completed the exec program function 
