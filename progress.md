@@ -19,3 +19,5 @@ Date: 10/10/26 I forgot to commit my changes yesterday so its a commit for 9/10/
 Date: 11/10/26 I did the add sub stuff and set stuff in execute program this morning .... call and func end is left and im workin'' on it rn will do a push soon Inhsllah ToT
 
 Date: 11/10/26 Completed the exec program function 
+
+Date: 12/10/26 I wrote the writeTDBG but and the sesstion.txt i wrote a func that writes text to see if my code works but now ive removed that function as it was of no need and now .tdbg file is being generated ... I hope its correct though

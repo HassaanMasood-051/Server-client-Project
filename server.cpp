@@ -190,11 +190,11 @@ struct TTDBHeader
     int64_t indexOffset;
 };
 
-void writeHeader(FILE *f, const TTDBHeader &h)
-{
+void writeHeader(FILE *f, const TTDBHeader &h) {
     fwrite(h.magic, 1, 4, f);
     fwrite(&h.version, sizeof(int32_t), 1, f);
-
+    fwrite(&h.stepCount, sizeof(int32_t), 1, f);
+    fwrite(&h.indexOffset, sizeof(int64_t), 1, f);
 }
 
 struct FuncEntry {
@@ -577,6 +577,8 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
     mainFrame.func_name = "main";
     callStack.push(mainFrame);
 
+    ip++;
+
     while (!callStack.isEmpty()) {
         if (ip >= lines.size()) {
             cout << "Err:: Program just went past the last line.\n";
@@ -770,8 +772,7 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
                             if (caller.argv[i].name == callTokens[x+2].text) {
                                 caller.argv[i].value = done.argv[x].value;
                             }
-                        }
-                        for (int i = 0; i < caller.localCount; i++) {
+                        } for (int i = 0; i < caller.localCount; i++) {
                             if (caller.locals[i].name == callTokens[x+2].text) {
                                 caller.locals[i].value = done.argv[x].value;
                             }
@@ -787,20 +788,45 @@ void executeProgram(const char *resolveBinPath, int64_t mainOffset, Timeline &ti
     }
 }
 
-void writeTdbg(Timeline &timeline, const char *tdbgPath)
-{
-    // placeholder for header
-    // index array of the size of stepcount from the timeline
-    // placing each snapshot in the file while maintaining the index(starting point of each nth snapshot)
-    // after timeline add the index array i the file
-    // update the header
-}
-// main section
-int32_t main()
-{
+void writeTdbg(Timeline &timeline, const char *tdbgPath) {
+    FILE *f = fopen(tdbgPath, "wb");
+    if (!f) {
+        cout << "Err:: Cant open tdbg file for Some reason.\n";
+        return;
+    } int32_t steps = timeline.getStepCount();
 
-    if (!validateProgram("source.bin"))
-    {
+    TTDBHeader temp;
+    temp.magic[0] ='T';
+    temp.magic[1] = 'T';
+    temp.magic[2] = 'D';
+    temp.magic[3] ='B';
+    temp.version = 1;
+    temp.stepCount = steps;
+    temp.indexOffset = 0; 
+    writeHeader(f,temp);
+    int64_t *arr = new int64_t[steps];
+    int ct = 0;
+
+    TimelineNode *node = timeline.begin();
+    while (node != nullptr) {
+        arr[ct] = ftell(f);        
+        fwrite(node->data, sizeof(Snapshot), 1, f);
+        node = node->next;
+        ct++;
+    }
+
+    int64_t idxOffset = ftell(f);
+    fwrite(arr, sizeof(int64_t), steps, f);
+    rewind(f);
+    temp.indexOffset = idxOffset;
+    writeHeader(f, temp);
+    fclose(f);
+    delete[] arr;
+}
+
+int32_t main() {
+
+    if (!validateProgram("source.bin")) {
         // send an error response instead of a .tdbg file
         return 1;
     }
@@ -815,6 +841,7 @@ int32_t main()
 
     Timeline timeline;
     executeProgram("resolve.bin", mainOffset, timeline);
+    cout << "Steps: " << timeline.getStepCount() << endl;
 
     writeTdbg(timeline, "session.tdbg");
 

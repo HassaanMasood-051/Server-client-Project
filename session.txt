@@ -1,0 +1,62 @@
+Total steps: 6
+
+Step 1
+  Stack depth: 1
+  Frame 0: main
+    returnLine: -1
+    args (0):
+    locals (1):
+      k = 10
+
+Step 2
+  Stack depth: 2
+  Frame 0: foo
+    returnLine: 7
+    args (1):
+      b = 10
+    locals (0):
+  Frame 1: main
+    returnLine: -1
+    args (0):
+    locals (1):
+      k = 10
+
+Step 3
+  Stack depth: 2
+  Frame 0: foo
+    returnLine: 7
+    args (1):
+      b = 10
+    locals (1):
+      a = 10
+  Frame 1: main
+    returnLine: -1
+    args (0):
+    locals (1):
+      k = 10
+
+Step 4
+  Stack depth: 2
+  Frame 0: foo
+    returnLine: 7
+    args (1):
+      b = 20
+    locals (1):
+      a = 10
+  Frame 1: main
+    returnLine: -1
+    args (0):
+    locals (1):
+      k = 10
+
+Step 5
+  Stack depth: 1
+  Frame 0: main
+    returnLine: -1
+    args (0):
+    locals (1):
+      k = 20
+
+Step 6
+  Stack depth: 0
+
