@@ -23,9 +23,13 @@
 #include <vector>
 #include <sys/socket.h>
 #include "helper.h"
+#include <fstream>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 using namespace std;
 
 // ---- Constants ----
+#define BUFFER_SIZE 4096
 const char *PROGRAM_NAME = "ttdb";
 const char *PROMPT = "ttdb> ";
 const int IO_BUFFER_SIZE = 64 * 1024;     // fixed buffer for streaming files to and from the socket
@@ -86,35 +90,115 @@ struct DebugSession
 // PART A: TALKING TO THE LOAD BALANCER
 // =============================================================================================
 
-bool recvAll(int sock, char *buf, size_t n)
-{
-    // recv() can return fewer bytes than asked for, so keep calling it until exactly n bytes are read.
-    // Return false if the connection closes or fails before n bytes arrive.
-}
-bool sendAll(int sock, const char *buf, size_t n)
-{
-    // send() can send fewer bytes than asked for, so keep calling it until all n bytes are sent.
-    // Use the flag MSG_NOSIGNAL. Return false if the connection fails.
+bool receiveData(int sock, void *buffer, size_t n) {
+    size_t total = 0;
+    while (total < n) {
+        ssize_t bytes = recv(sock, (char*)buffer + total, n - total, 0);
+        if (bytes <= 0) {
+            return false;
+        }
+        total += bytes;
+    }
+    return true;
 }
 
-int connectToHost(const char *host, int port)
-{
-    // Create a TCP socket and connect it to host:port.
-    // Return the socket, or -1 if the connection fails.
+bool sendData(int sock, const void *buffer, size_t n) {
+    size_t total = 0;
+    while (total < n) {
+        ssize_t bytes = send(sock, (const char*)buffer + total, n - total, 0);
+        if (bytes <= 0) {
+            return false;
+        }
+        total += bytes;
+    }
+    return true;
 }
-bool uploadSource(int sock, const char *sourcePath)
-{
-    // have to do checksum and then send
-    // When the file is finished, call shutdown(sock, SHUT_WR). This is how the server knows the string is complete.
-    // Return false if the file cannot be opened or any send fails.
+
+int connectServer(const char *ip, int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return -1;
+    } struct sockaddr_in serverAddr;
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(port);
+
+    if (inet_pton(AF_INET, ip, &serverAddr.sin_addr) <= 0) {
+        close(sock);
+        return -1;
+    }
+
+    if (connect(sock, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
+        close(sock);
+        return -1;
+    }
+
+    return sock;
 }
-bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
-{
-    // Reply on the wire: [status][payload][CRC-32]. The CRC covers the status byte too.
-    // Feed every received byte (status included) to a TrailerChecker.
-    // Status 1: collect the payload into outError. Status 0: write the payload to the file.
-    // At the end call verify(). If it fails, delete the file, set outError to
-    // "checksum mismatch, response corrupted" and return false.
+
+bool sendSourceFile(int sock, const char *filename) {
+    FILE *file = fopen(filename, "rb");
+    if (file == NULL) {
+        return false;
+    }
+
+    char buffer[BUFFER_SIZE];
+    size_t bytesRead;
+    while ((bytesRead = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+        if (!sendData(sock, buffer, bytesRead)) {
+            fclose(file);
+            return false;
+        }
+    }
+
+    fclose(file);
+    shutdown(sock, SHUT_WR);
+    return true;
+}
+
+bool receiveResponse(int sock, const char *outputFile, string &errorMsg) {
+    char status;
+    if (!receiveData(sock, &status, 1)) {
+        errorMsg = "Failed to receive status";
+        return false;
+    }
+
+    FILE *outFile = NULL;
+    if (status == 0) {
+        outFile = fopen(outputFile, "wb");
+        if (outFile == NULL) {
+            errorMsg = "Cannot create output file";
+            return false;
+        }
+    }
+
+    char buffer[BUFFER_SIZE];
+    ssize_t bytesRead;
+    while ((bytesRead = recv(sock, buffer, BUFFER_SIZE, 0)) > 0) {
+        if (outFile != NULL) {
+            fwrite(buffer, 1, bytesRead, outFile);
+        } else if (status == 1) {
+            errorMsg.append(buffer, bytesRead);
+        }
+    }
+
+    if (outFile != NULL) {
+        fclose(outFile);
+    }
+
+    if (bytesRead < 0) {
+        errorMsg = "Error receiving data";
+        if (outFile != NULL) {
+            remove(outputFile);
+        }
+        return false;
+    }
+
+    if (status == 1) {
+        return false;
+    }
+
+    return true;
 }
 
 // =============================================================================================
