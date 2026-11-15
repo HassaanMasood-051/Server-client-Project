@@ -21,3 +21,7 @@ Date: 11/10/26 I did the add sub stuff and set stuff in execute program this mor
 Date: 11/10/26 Completed the exec program function 
 
 Date: 12/10/26 I wrote the writeTDBG but and the sesstion.txt i wrote a func that writes text to see if my code works but now ive removed that function as it was of no need and now .tdbg file is being generated ... I hope its correct though
+
+Date: unknown I forgot to update this file in my last commit
+
+Date: 15/11/26 Updated all the files and commited all my changes ... no commit from last 3 days becuase some issues happned with my git when i was updaing the OS recently fixed them.

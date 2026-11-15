@@ -34,6 +34,10 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <cstring>
+#include <cstdio>
+#include <ctime>
+#include <sys/types.h>
 #include "helper.h"
 using namespace std;
 
@@ -48,6 +52,7 @@ const int STARTUP_POLL_INTERVAL_MS = 100;  // wait between those tries (50 x 100
 int lbPort = 5000;
 string serverHost = "127.0.0.0";
 int serverPort = 5001;
+const int CLIENT_TIMEOUT_SEC = 30;
 
 
 // ---- Queue: here it holds client sockets (int). ----
@@ -69,26 +74,59 @@ public:
     Queue()
     {
 
+    front = NULL;
+    rear = NULL;
+    count = 0;
     }
     ~Queue()
     {
 
+    while (front != NULL) {
+        Node *temp = front;
+        front = front->next;
+        delete temp;
+    }
     }
     void enqueue(const T &val)
     {
 
+    Node *n = new Node;
+    n->data = val;
+    n->next = NULL;
+    if (rear == NULL) {
+        front = n;
+        rear = n;
+    } else {
+        rear->next = n;
+        rear = n;
+    }
+    count++;
     }
     T dequeue()
     {
 
+    if (front == NULL) {
+        return T();
+    }
+    Node *temp = front;
+    T val = temp->data;
+    front = front->next;
+    if (front == NULL) {
+        rear = NULL;
+    }
+    delete temp;
+    count--;
+    return val;
     }
     bool isEmpty()
     {
         
+    return count == 0;
     }
     int size()
     {
 
+    return count;
     }
 };
 
@@ -112,11 +150,29 @@ bool sendAll(int sock, const char *buf, size_t n)
     // Reply format: [status: 1 byte][sending_material][checksum: 4 bytes].
     // send() may send fewer bytes than asked for, so keep calling it until all n bytes are sent.
     
+    size_t sent = 0;
+    while (sent < n) {
+        ssize_t r = send(sock, buf + sent, n - sent, MSG_NOSIGNAL);
+        if (r <= 0) {
+            return false;
+        }
+        sent += r;
+    }
+    return true;
 }
 bool sendError(int sock, const string &message)
 {
     // Reply format: [status: 1 byte][payload until close][checksum: 4 bytes].
     // For an error: send one byte with value 1, then the message text. 
+    char one = 1;
+    if (!sendAll(sock, &one, 1)) {
+        return false;
+    }
+    if (!sendAll(sock, message.c_str(), message.size())) {
+        return false;
+    }
+    uint32_t sum = addToChecksum(0, message.c_str(), message.size());
+    return sendAll(sock, (char*)&sum, 4);
 }
 int createListenSocket(int port)
 { 
@@ -124,11 +180,51 @@ int createListenSocket(int port)
     // set SO_REUSEADDR so we can restart the load balancer right away.
     // bind() to the port on any address, then listen(LISTEN_BACKLOG).
     // If bind or listen fails, print the error and exit, because without this socket we cannot work.
+    int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0) {
+        perror("socket");
+        exit(1);
+    }
+    int yes = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
+
+    if (bind(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        exit(1);
+    }
+    if (listen(s, LISTEN_BACKLOG) < 0) {
+        perror("listen");
+        exit(1);
+    }
+    return s;
 }
 int connectToServer(const char *host, int port)
 {
     // Create a TCP socket (SOCK_CLOEXEC) and connect it to host:port.
     // Return the socket, or -1 if the connection fails 
+    int s = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (s < 0) {
+        return -1;
+    }
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) <= 0) {
+        close(s);
+        return -1;
+    }
+    if (connect(s, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(s);
+        return -1;
+    }
+    return s;
 }
 
 // =============================================================================================
@@ -142,6 +238,12 @@ bool startServer(int port)
     //   Example: "./server 5001 &"
     // Call system() with it.
     // Return true if system() returned 0, otherwise false.
+    string cmd = string(SERVER_PATH) + " " + to_string(port) + " &";
+    int r = system(cmd.c_str());
+    if (r == 0) {
+        return true;
+    }
+    return false;
 }
 int connectToServerWithWakeup()
 {
@@ -149,6 +251,21 @@ int connectToServerWithWakeup()
     // 2. Otherwise call startServer(). If it fails, return -1.
     // 3. Try connectToServer() up to STARTUP_MAX_ATTEMPTS times 
     // 4. Return the first working socket, or -1 if the server never came up.
+    int s = connectToServer(serverHost.c_str(), serverPort);
+    if (s != -1) {
+        return s;
+    }
+    if (!startServer(serverPort)) {
+        return -1;
+    }
+    for (int i = 0; i < STARTUP_MAX_ATTEMPTS; i++) {
+        usleep(STARTUP_POLL_INTERVAL_MS * 1000);
+        s = connectToServer(serverHost.c_str(), serverPort);
+        if (s != -1) {
+            return s;
+        }
+    }
+    return -1;
 }
 
 
@@ -156,6 +273,42 @@ int connectToServerWithWakeup()
 // PART 2: PASSING THE STRING AND THE REPLY (one client, called by the main thread only)
 // =============================================================================================
 
+
+int forwardStream(int from, int to)
+{
+    char *buf = new char[IO_BUFFER_SIZE];
+    ssize_t n = recv(from, buf, 1, 0);
+    if (n <= 0) {
+        delete[] buf;
+        return 2;
+    }
+    if (!sendAll(to, buf, 1)) {
+        delete[] buf;
+        return 2;
+    }
+
+    TrailerChecker tc;
+    while ((n = recv(from, buf, IO_BUFFER_SIZE, 0)) > 0) {
+        string out = tc.feed(buf, n);
+        if (out.size() > 0) {
+            if (!sendAll(to, out.c_str(), out.size())) {
+                delete[] buf;
+                return 2;
+            }
+        }
+    }
+    delete[] buf;
+    if (n < 0) {
+        return 2;
+    }
+    if (!tc.finish()) {
+        return 1;
+    }
+    if (!sendAll(to, tc.held.c_str(), 4)) {
+        return 2;
+    }
+    return 0;
+}
 
 void relayOneClient(ClientInfo &c)
 {
@@ -167,6 +320,31 @@ void relayOneClient(ClientInfo &c)
     // 5. Server -> client: repeat recv() from serverSock and sendAll() to clientSock.
     //    Stop when recv() returns 0 (the server sent its whole reply and closed) or fails.
     // 6. Close both sockets.
+    int serverSock = connectToServerWithWakeup();
+    if (serverSock == -1) {
+        sendError(c.sock, "backend server failed to start");
+        close(c.sock);
+        return;
+    }
+
+    int up = forwardStream(c.sock, serverSock);
+    shutdown(serverSock, SHUT_WR);
+    if (up == 1) {
+        sendError(c.sock, "upload checksum mismatch");
+        close(serverSock);
+        close(c.sock);
+        return;
+    }
+    if (up == 2) {
+        close(serverSock);
+        close(c.sock);
+        return;
+    }
+
+    forwardStream(serverSock, c.sock);
+
+    close(serverSock);
+    close(c.sock);
 }
 
 
@@ -185,6 +363,33 @@ void acceptLoop(int listenSock)
     //   Otherwise enqueue the client socket.
     // Never wait for the server here, so new clients are always accepted quickly.
     // If accept() fails, print the error and keep going (do not end the thread).
+    while (flag) {
+        struct sockaddr_in caddr;
+        socklen_t len = sizeof(caddr);
+        int cs = accept4(listenSock, (struct sockaddr*)&caddr, &len, SOCK_CLOEXEC);
+        if (cs < 0) {
+            perror("accept");
+            continue;
+        }
+
+        ClientInfo c;
+        c.sock = cs;
+        char ipText[64];
+        inet_ntop(AF_INET, &caddr.sin_addr, ipText, sizeof(ipText));
+        c.address = ipText;
+        c.port = ntohs(caddr.sin_port);
+        c.arrivedAt = time(NULL);
+
+        queueMutex.lock();
+        if (pendingClients.size() >= MAX_PENDING_CLIENTS) {
+            queueMutex.unlock();
+            sendError(cs, "server busy, try again later");
+            close(cs);
+        } else {
+            pendingClients.enqueue(c);
+            queueMutex.unlock();
+        }
+    }
 }
 void dispatcherLoop()
 {
@@ -192,6 +397,27 @@ void dispatcherLoop()
     // Repeat:
     //   Lock queueMutex, take ONE client out of the queue if there is one, unlock.
     //   If we got a client: call relayOneClient(). The next client is taken out of the queue only after this one is finished.
+    while (flag) {
+        ClientInfo c;
+        bool got = false;
+
+        queueMutex.lock();
+        if (!pendingClients.isEmpty()) {
+            c = pendingClients.dequeue();
+            got = true;
+        }
+        queueMutex.unlock();
+
+        if (got) {
+            if (time(NULL) - c.arrivedAt > CLIENT_TIMEOUT_SEC) {
+                close(c.sock);
+            } else {
+                relayOneClient(c);
+            }
+        } else {
+            usleep(20 * 1000);
+        }
+    }
 }
 
 void handler(int sg) {
@@ -205,5 +431,19 @@ int main(int argc, char *argv[])
     // 2. listenSock = createListenSocket(LB_PORT).
     // 3. Start a thread that runs acceptLoop(listenSock) and detach it.
     // 4. Call dispatcherLoop().
+    signal(SIGPIPE, SIG_IGN);
+    if (argc >= 2) {
+        serverHost = argv[1];
+    }
+    if (argc >= 3) {
+        serverPort = atoi(argv[2]);
+    }
+
+    int listenSock = createListenSocket(lbPort);
+    thread t(acceptLoop, listenSock);
+    t.detach();
+    dispatcherLoop();
+
+    close(listenSock);
     return 0;
 }

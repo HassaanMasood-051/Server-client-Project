@@ -10,6 +10,12 @@
 #include <sstream>
 #include <iomanip>
 #include <cinttypes>
+#include <cstring>
+#include <signal.h>
+#include <sys/time.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include "helper.h"
 using namespace std;
 
 const int32_t MAX_VARS_PER_FRAME = 16;
@@ -161,6 +167,8 @@ public:
     int32_t getStepCount() {
         return this->stepCount;
     }
+
+    ~Timeline();
 };
 
 struct Variable {
@@ -182,6 +190,16 @@ struct Snapshot {
     int32_t stackDepth;
 };
 
+Timeline::~Timeline() {
+    TimelineNode *node = this->head;
+    while (node != nullptr) {
+        TimelineNode *nxt = node->next;
+        delete node->data;
+        delete node;
+        node = nxt;
+    }
+}
+
 struct TTDBHeader
 {
     char magic[4]; // "TTDB"
@@ -196,21 +214,6 @@ void writeHeader(FILE *f, const TTDBHeader &h) {
     fwrite(&h.stepCount, sizeof(int32_t), 1, f);
     fwrite(&h.indexOffset, sizeof(int64_t), 1, f);
 }
-
-struct FuncEntry {
-    string funcName;
-    int64_t byteOffsetInResolveBin;
-
-    FuncEntry () {
-        this->funcName = "NULL";
-        this->byteOffsetInResolveBin = 0x0;
-    }
-
-    FuncEntry (string _funcName, int64_t __byte) {
-        this->funcName = _funcName;
-        this->byteOffsetInResolveBin = __byte;
-    }
-};
 
 bool validateProgram(const char *sourcePath) {
     ifstream read (sourcePath);
@@ -824,26 +827,195 @@ void writeTdbg(Timeline &timeline, const char *tdbgPath) {
     delete[] arr;
 }
 
-int32_t main() {
+bool sendBytes(int sock, const char *buf, size_t n) {
+    size_t done = 0;
+    while (done < n) {
+        ssize_t r = send(sock, buf + done, n - done, MSG_NOSIGNAL);
+        if (r <= 0) {
+            return false;
+        }
+        done += r;
+    }
+    return true;
+}
+
+void sendErrorReply(int sock, string msg) {
+    char st = 1;
+    sendBytes(sock, &st, 1);
+    sendBytes(sock, msg.c_str(), msg.size());
+    uint32_t sum = addToChecksum(0, msg.c_str(), msg.size());
+    sendBytes(sock, (char*)&sum, 4);
+}
+
+bool receiveSource(int sock, string &err) {
+    char status;
+    if (recv(sock, &status, 1, MSG_WAITALL) != 1) {
+        err = "Err:: Got nothing from the client.";
+        return false;
+    }
+
+    FILE *f = fopen("source.bin", "wb");
+    if (!f) {
+        err = "Err:: Cant create source.bin.";
+        return false;
+    }
+
+    char *buf = new char[IO_BUFFER_SIZE];
+    TrailerChecker tc;
+    uint64_t total = 0;
+    ssize_t n;
+    while ((n = recv(sock, buf, IO_BUFFER_SIZE, 0)) > 0) {
+        total += n;
+        if (total > MAX_SOURCE_BYTES + 4) {
+            fclose(f);
+            delete[] buf;
+            err = "Err:: Source file is too big.";
+            return false;
+        }
+        string out = tc.feed(buf, n);
+        fwrite(out.c_str(), 1, out.size(), f);
+    }
+    fclose(f);
+    delete[] buf;
+
+    if (n < 0) {
+        err = "Err:: Upload timed out.";
+        return false;
+    }
+    if (!tc.finish()) {
+        err = "Err:: Upload checksum mismatch.";
+        return false;
+    }
+    return true;
+}
+
+bool buildTdbg(string &err) {
+    stringstream captured;
+    streambuf *old = cout.rdbuf(captured.rdbuf());
+    bool ok = true;
 
     if (!validateProgram("source.bin")) {
-        // send an error response instead of a .tdbg file
+        cout << "Err:: Wrong func / func_end structure.\n";
+        ok = false;
+    }
+
+    int64_t mainOffset = -1;
+    if (ok) {
+        mainOffset = resolveProgram("source.bin", "resolve.txt");
+        if (mainOffset == -1) {
+            ok = false;
+        }
+    }
+    if (ok) {
+        if (!convertTextToBinaryResolve("resolve.txt", "resolve.bin")) {
+            ok = false;
+        }
+    }
+    if (ok) {
+        Timeline timeline;
+        executeProgram("resolve.bin", mainOffset, timeline);
+        if (captured.str().find("Err::") != string::npos) {
+            ok = false;
+        } else {
+            writeTdbg(timeline, "session.tdbg");
+        }
+    }
+
+    cout.rdbuf(old);
+
+    if (!ok) {
+        err = captured.str();
+        if (err.empty()) {
+            err = "Err:: Something went wrong in the server.";
+        }
+        while (!err.empty() && err.back() == '\n') {
+            err.pop_back();
+        }
+    }
+    return ok;
+}
+
+void sendTdbgReply(int sock) {
+    FILE *f = fopen("session.tdbg", "rb");
+    if (!f) {
+        sendErrorReply(sock, "Err:: Cant open session.tdbg.");
+        return;
+    }
+
+    char st = 0;
+    sendBytes(sock, &st, 1);
+
+    uint32_t sum = 0;
+    char *buf = new char[IO_BUFFER_SIZE];
+    size_t n;
+    while ((n = fread(buf, 1, IO_BUFFER_SIZE, f)) > 0) {
+        sum = addToChecksum(sum, buf, n);
+        if (!sendBytes(sock, buf, n)) {
+            break;
+        }
+    }
+    sendBytes(sock, (char*)&sum, 4);
+
+    delete[] buf;
+    fclose(f);
+}
+
+void handleClient(int sock) {
+    struct timeval tv;
+    tv.tv_sec = SOCKET_TIMEOUT_SEC;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    string err;
+    if (!receiveSource(sock, err)) {
+        sendErrorReply(sock, err);
+        return;
+    }
+    if (!buildTdbg(err)) {
+        sendErrorReply(sock, err);
+        return;
+    }
+    sendTdbgReply(sock);
+}
+
+int main(int argc, char *argv[]) {
+    signal(SIGPIPE, SIG_IGN);
+
+    int port = 5001;
+    if (argc >= 2) {
+        port = atoi(argv[1]);
+    }
+
+    int ls = socket(AF_INET, SOCK_STREAM, 0);
+    if (ls < 0) {
+        perror("socket");
+        return 1;
+    }
+    int yes = 1;
+    setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons(port);
+
+    if (bind(ls, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+        return 1;
+    }
+    if (listen(ls, 8) < 0) {
+        perror("listen");
         return 1;
     }
 
-    int64_t mainOffset = resolveProgram("source.bin", "resolve.txt");
-    if (mainOffset == -1) {
-        return 1;
+    while (true) {
+        int c = accept(ls, NULL, NULL);
+        if (c < 0) {
+            continue;
+        }
+        handleClient(c);
+        close(c);
     }
-    if (!convertTextToBinaryResolve("resolve.txt", "resolve.bin")) {
-        return 1;
-    }
-
-    Timeline timeline;
-    executeProgram("resolve.bin", mainOffset, timeline);
-    cout << "Steps: " << timeline.getStepCount() << endl;
-
-    writeTdbg(timeline, "session.tdbg");
-
     return 0;
 }
